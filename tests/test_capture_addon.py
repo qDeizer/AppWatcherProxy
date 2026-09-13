@@ -52,3 +52,21 @@ async def test_websocket_messages_are_added_as_searchable_frames() -> None:
     assert session.is_streaming is True
     assert session.stream.kind == "websocket"
     assert session.stream.frames[-1].raw == flow.websocket.messages[-1].content
+
+
+async def test_websocket_retention_and_eviction_are_bounded():
+    async def on_session(session):
+        pass
+    flow = tflow.twebsocketflow()
+    addon = InspectorAddon(on_session, max_body_bytes=1)
+    addon._identity = _identity
+    await addon.websocket_start(flow)
+    await addon.websocket_message(flow)
+    await addon.websocket_message(flow)
+    session = addon._pending[flow.id]
+    assert len(session.stream.reconstructed) == 1
+    assert len(session.stream.frames) == 1
+    assert len(flow.websocket.messages) == 1
+    assert session.is_truncated
+    addon.discard([session.id])
+    assert not addon._pending

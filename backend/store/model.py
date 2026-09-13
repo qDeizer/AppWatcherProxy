@@ -25,7 +25,7 @@ class Header(BaseModel):
 
 
 class Payload(BaseModel):
-    model_config = ConfigDict(ser_json_bytes="base64")
+    model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
 
     raw: bytes = b""
     parsed: Any | None = None
@@ -38,7 +38,7 @@ class Payload(BaseModel):
 
 
 class Frame(BaseModel):
-    model_config = ConfigDict(ser_json_bytes="base64")
+    model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
 
     seq: int
     timestamp: datetime = Field(default_factory=utc_now)
@@ -50,7 +50,7 @@ class Frame(BaseModel):
 
 
 class Stream(BaseModel):
-    model_config = ConfigDict(ser_json_bytes="base64")
+    model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
 
     kind: Literal["sse", "chunked", "h2_data", "websocket", "grpc", "raw_tcp"]
     frames: list[Frame] = Field(default_factory=list)
@@ -118,7 +118,7 @@ class Connection(BaseModel):
 
 
 class Session(BaseModel):
-    model_config = ConfigDict(ser_json_bytes="base64")
+    model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     connection_id: str

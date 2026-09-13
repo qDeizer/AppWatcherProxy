@@ -7,6 +7,8 @@ export interface Stats {
   capture_state: CaptureState
   capture_error: string | null
   recording: boolean
+  recording_error?: string | null
+  processing_error?: string | null
 }
 
 export interface CertificateStatus {

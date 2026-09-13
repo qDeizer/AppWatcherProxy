@@ -34,19 +34,17 @@ echo CA sertifikasi kontrol ediliyor...
 ".venv\Scripts\python.exe" -m backend.cert.bootstrap
 if not "%errorlevel%"=="0" goto :certificate_error
 
-if not exist "frontend\dist\index.html" (
-  where npm >nul 2>&1
-  if not "%errorlevel%"=="0" (
-    echo HATA: Frontend build icin Node.js ve npm gerekli.
-    pause
-    exit /b 1
-  )
-  echo Frontend hazirlaniyor...
-  pushd frontend
-  call npm install || goto :error_popd
-  call npm run build || goto :error_popd
-  popd
+where npm >nul 2>&1
+if errorlevel 1 (
+  echo HATA: Frontend build icin Node.js ve npm gerekli.
+  pause
+  exit /b 1
 )
+echo Frontend hazirlaniyor...
+pushd frontend
+call npm ci || goto :error_popd
+call npm run build || goto :error_popd
+popd
 
 echo Stale ag durumu temizleniyor...
 ".venv\Scripts\python.exe" -m backend.net.cleanup --runtime-dir "%CD%\.runtime"

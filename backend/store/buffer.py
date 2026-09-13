@@ -24,7 +24,7 @@ class SessionBuffer:
 
     @staticmethod
     def _measure(session: Session) -> int:
-        return len(session.model_dump_json())
+        return len(session.model_dump_json().encode("utf-8")) * 2
 
     async def upsert(self, session: Session) -> list[str]:
         evicted: list[str] = []

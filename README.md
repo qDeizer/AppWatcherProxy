@@ -2,7 +2,7 @@
 
 Windows'ta çalışan, sistem genelindeki dış ağ bağlantılarını uygulama ve süreçlerle ilişkilendirerek yerel bir arayüzde incelemeyi hedefleyen network inspection aracı.
 
-> Durum: İlk çalışan iskelet hazır. FastAPI yaşam döngüsü, fail-open kurtarma/watchdog, RAM ring buffer, mitmproxy local-mode adaptörü ve React arayüz temeli bulunuyor. Protokol decoder'ları, sertifika kurulum akışı, streaming ve şifreli kayıt sonraki aşamalardır.
+> Durum: HTTP istek/yanıt inceleme, WebSocket kareleri, içerik araması, CA kurulumu, RAM ring buffer ve şifreli kayıt kullanılabilir. Bu sürüm nihai spesifikasyonun tamamı değildir: canlı SSE parçalama, genel TCP/UDP/DNS decoder'ları ve `.mitm` dışa aktarımı henüz yoktur. SSE içeriği yanıt tamamlanınca gösterilir.
 
 ## İlk çalıştırma
 
@@ -61,3 +61,17 @@ npm run build
 - Kayıt kapalıyken `recordings/` oluşturulmaz.
 - Uzak font, script, CDN ve telemetri yoktur.
 - Tanınmayan payload gelecekte de ham hali korunarak gösterilecektir.
+
+## Kayıt ve yeniden açma
+
+Üst çubuktaki **Kayıt** düğmesiyle en az 8 karakterli bir parola belirleyip kaydı başlatın. Uygulama seçimi yoksa tüm uygulamalar, seçim varsa yalnızca seçilen uygulamalar kaydedilir. Kapsam başlangıçta sabitlenir; önceden açılmış oturumlar canlı kayda alınmaz. Capture ayrıca çalışıyor olmalıdır. **Kaydı durdur** dosyayı tamamlar.
+
+**Filtrelenmiş RAM’i kaydet**, mevcut arama ve uygulama filtresine uyan geçmiş RAM oturumlarını ayrı bir şifreli dosyaya aktarır. Kayıt listesindeki **Aç**, capture ve kayıt durduktan sonra parolayla RAM listesini değiştirir. Yanlış parola veya bozuk dosyada mevcut RAM korunur. **Şifreli indir** dosyanın yedeğini indirir; başka bilgisayarda kullanmak için dosyayı `recordings/` içine yerleştirin.
+
+Dosyalar `recordings/<kimlik>.awp` biçimindedir: scrypt anahtar türetimi, AES-256-GCM doğrulamalı şifreleme ve sıralı parça doğrulaması kullanılır. Parola dosyada tutulmaz; kaybolursa kurtarılamaz. API anahtarları ve özel mesajlar içerebilir. Tamamlanmamış dosyalar sessizce yüklenmez. Dosya başına sınır 1 GB, yazma kuyruğu 96 MB'dır; disk dolması/yetişememesi görünür hata verir ve capture'dan bağımsız olarak kaydı durdurur.
+
+## Hata tanılama ve sınırlar
+
+`.runtime/diagnostics.log` ve dönen üç yedek, uygulama yaşam döngüsünü ve yakalanan hataların tür/kod konumlarını saklar; trafik gövdeleri, parolalar ve hata mesajlarındaki olası sırlar bu dosyaya yazılmaz. İşletim sisteminin süreci zorla sonlandırması uygulama traceback'i bırakmayabilir. Eski log yoksa kapanış nedeni kesin olarak belirlenemez.
+
+RAM ring buffer tahmini bütçesi 512 MB, oturum sayısı 100.000, gövde yakalama sınırı 10 MB'dır. Bunlar toplam süreç RAM'i için sert bir işletim sistemi limiti değildir. WebSocket geçmişi ayrıca 10.000 kareyle sınırlıdır. Arayüz 1,5 saniyede bir yenilenir; tablo en son 1.000 sonucu gösterir, içerik araması backend'deki RAM verisini tarar. `start.bat` frontend'i her çalıştırmada yeniden derler; güncel kaynaklar eski bir build nedeniyle gizlenmez.

@@ -51,6 +51,19 @@ button:focus-visible, input:focus-visible { outline: 2px solid #4cb9f2; outline-
 .button:hover:not(:disabled) { background: var(--surface-hover); border-color: #365262; }
 .button:active:not(:disabled) { transform: translateY(1px); }
 .button:disabled { opacity: .45; cursor: not-allowed; }
+.recording-dialog { color: #d9e6ef; background: #0b1820; border: 1px solid #39515e; border-radius: 12px; width: min(740px, 94vw); max-height: 88vh; padding: 0; }
+.recording-dialog::backdrop { background: #000a; }
+.recording-content { padding: 20px; overflow-wrap: anywhere; }
+.recording-content p { line-height: 1.6; }
+.recording-content label { display: grid; gap: 8px; }
+.recording-content input { border: 1px solid #39515e; background: #081219; color: #eef6ff; padding: 10px; border-radius: 6px; }
+.recording-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0; }
+.recording-list { padding: 0; list-style: none; }
+.recording-list li { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; border-top: 1px solid #263b48; padding: 12px 0; }
+.recording-list li > span { flex: 1 1 230px; }
+.recording-list small { display: block; color: #94a9b8; margin-top: 4px; }
+.recording-error { color: #ffb0a7; }
+.button-danger { border-color: #d85656; color: #ffb0a7; }
 .button-primary { background: #087fbd; border-color: #159bdc; color: white; }
 .button-primary:hover:not(:disabled) { background: #098bcf; border-color: #49b9ee; }
 .searchbox { height: 34px; min-width: 180px; max-width: 620px; display: flex; align-items: center; gap: 8px; padding: 0 9px; background: #0d1922; border: 1px solid #28404e; border-radius: var(--radius); color: var(--muted); }

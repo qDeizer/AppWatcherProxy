@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useState } from 'react'
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { ApplicationSummary, CertificateStatus, SessionSummary, Stats } from '../types'
 
@@ -18,8 +18,12 @@ export function useInspector() {
   const [certificate, setCertificate] = useState<CertificateStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [controlError, setControlError] = useState<string | null>(null)
+  const refreshing = useRef(false)
 
   const refresh = useCallback(async () => {
+    if (refreshing.current) return
+    refreshing.current = true
     try {
       const [nextStats, nextApplications, nextSessions, nextCertificate] = await Promise.all([
         api.stats(),
@@ -37,44 +41,24 @@ export function useInspector() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Backend bağlantısı kurulamadı')
     } finally {
+      refreshing.current = false
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
     void refresh()
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws`)
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data)
-      if (message.type === 'session_new' || message.type === 'session_complete') {
-        setSessions((current) => [message.session, ...current.filter((item) => item.id !== message.session.id)].slice(0, 1000))
-        void refresh()
-      } else if (message.type === 'session_update') {
-        setSessions((current) => {
-          const index = current.findIndex((item) => item.id === message.session.id)
-          if (index < 0) return [message.session, ...current].slice(0, 1000)
-          const next = [...current]
-          next[index] = message.session
-          return next
-        })
-      } else if (message.type === 'sessions_cleared') {
-        setSessions([])
-        void refresh()
-      } else if (message.type === 'status_change') {
-        void refresh()
-      }
-    }
-    return () => socket.close()
+    const timer = window.setInterval(() => void refresh(), 1500)
+    return () => window.clearInterval(timer)
   }, [refresh])
 
   const runControl = useCallback(
     async (action: 'start' | 'stop' | 'clear') => {
-      setError(null)
+      setControlError(null)
       try {
         await api[action]()
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : 'İşlem başarısız')
+        setControlError(reason instanceof Error ? reason.message : 'İşlem başarısız')
       } finally {
         await refresh()
       }
@@ -82,5 +66,5 @@ export function useInspector() {
     [refresh],
   )
 
-  return { stats, applications, sessions, certificate, error, loading, runControl }
+  return { stats, applications, sessions, certificate, error: controlError || error, loading, runControl, refresh }
 }

@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from backend.cert.manager import CertificateManager
+from backend.store.buffer import SessionBuffer
+from backend.store.recorder import read_recording
 
 router = APIRouter(prefix="/api")
 
@@ -20,10 +24,12 @@ async def stats(request: Request) -> dict:
     return {
         "session_count": len(store),
         "memory_bytes": store.memory_bytes,
-        "open_connections": 0,
+        "open_connections": request.app.state.capture.open_connections,
         "capture_state": request.app.state.capture.state.value,
         "capture_error": request.app.state.capture.error,
-        "recording": False,
+        "recording": request.app.state.recorder.active,
+        "recording_error": request.app.state.recorder.error,
+        "processing_error": request.app.state.processing_error,
     }
 
 
@@ -91,3 +97,87 @@ async def clear_sessions(request: Request) -> dict:
     await request.app.state.store.clear()
     await request.app.state.events.publish({"type": "sessions_cleared"})
     return {"cleared": True}
+
+
+class RecordingOptions(BaseModel):
+    password: str = Field(min_length=8, max_length=1024)
+    applications: list[str] = Field(default_factory=list, max_length=1000)
+    query: str = Field(default="", max_length=500)
+
+
+@router.get("/recordings")
+async def recordings(request: Request) -> dict:
+    recorder = request.app.state.recorder
+    return {"items": await asyncio.to_thread(recorder.list), "active": recorder.active,
+            "id": recorder.recording_id, "error": recorder.error}
+
+
+@router.post("/recordings/start")
+async def recording_start(options: RecordingOptions, request: Request) -> dict:
+    try:
+        recording_id = await request.app.state.recorder.start(options.password, options.applications)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, "Kayıt başlatılamadı; mevcut kaydı durdurup disk izinlerini kontrol edin") from exc
+    return {"id": recording_id}
+
+
+@router.post("/recordings/stop")
+async def recording_stop(request: Request) -> dict:
+    await request.app.state.recorder.stop()
+    return {"stopped": True, "error": request.app.state.recorder.error}
+
+
+@router.get("/recordings/{recording_id}/download")
+async def recording_download(recording_id: str, request: Request):
+    try:
+        path = request.app.state.recorder.path(recording_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return FileResponse(path, media_type="application/octet-stream", filename=path.name)
+
+
+@router.post("/recordings/{recording_id}/open")
+async def recording_open(recording_id: str, options: RecordingOptions, request: Request) -> dict:
+    capture = request.app.state.capture
+    recorder = request.app.state.recorder
+    async with capture._lock, recorder._lock:
+        if capture.state.value not in {"stopped", "error"} or recorder._task is not None:
+            raise HTTPException(409, "Kayıt açmadan önce capture ve kaydı durdurun")
+        current = request.app.state.store
+        replacement = SessionBuffer(current.max_sessions, current.max_bytes)
+        def load() -> None:
+            async def populate() -> None:
+                for session in read_recording(recorder.path(recording_id), options.password):
+                    await replacement.upsert(session)
+            asyncio.run(populate())
+        try:
+            await asyncio.to_thread(load)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(400, "Kayıt açılamadı: parola yanlış, dosya eksik veya bozuk. Mevcut RAM verisi korundu.") from exc
+        request.app.state.store = replacement
+    await request.app.state.events.publish({"type": "sessions_cleared"})
+    return {"loaded": len(replacement)}
+
+
+@router.post("/recordings/export")
+async def recording_export(options: RecordingOptions, request: Request) -> dict:
+    from backend.store.recorder import Recorder
+
+    store = request.app.state.store
+    sessions = await store.list(limit=store.max_sessions, query=options.query)
+    recorder = Recorder(request.app.state.recorder.root)
+    recording_id = await recorder.start(options.password, options.applications)
+    try:
+        for session in reversed(sessions):
+            if options.applications and session.application.name not in options.applications:
+                continue
+            data = session.model_dump_json().encode("utf-8")
+            await asyncio.to_thread(recorder._writer.append, data)
+    except Exception as exc:
+        recorder.error = "Dışa aktarım tamamlanamadı"
+        raise HTTPException(500, "Dışa aktarım başarısız; disk alanını ve izinleri kontrol edin") from exc
+    finally:
+        await recorder.stop()
+    if recorder.error:
+        raise HTTPException(500, recorder.error)
+    return {"id": recording_id}

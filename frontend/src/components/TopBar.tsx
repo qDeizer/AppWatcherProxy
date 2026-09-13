@@ -7,6 +7,7 @@ interface TopBarProps {
   query: string
   onQueryChange: (value: string) => void
   onControl: (action: 'start' | 'stop' | 'clear') => void
+  onRecording: () => void
 }
 
 function formatMemory(bytes: number) {
@@ -14,7 +15,7 @@ function formatMemory(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-export function TopBar({ stats, query, onQueryChange, onControl }: TopBarProps) {
+export function TopBar({ stats, query, onQueryChange, onControl, onRecording }: TopBarProps) {
   const running = stats.capture_state === 'running' || stats.capture_state === 'starting'
   const busy = stats.capture_state === 'starting' || stats.capture_state === 'stopping'
   return (
@@ -31,7 +32,7 @@ export function TopBar({ stats, query, onQueryChange, onControl }: TopBarProps) 
           disabled={busy}
           onClick={() => onControl(running ? 'stop' : 'start')}
         />
-        <IconButton icon={<Circle size={15} />} label="Kayıt" disabled title="Kayıt aşaması yakında" />
+        <IconButton icon={<Circle size={15} />} label={stats.recording ? '● Kayıt açık' : 'Kayıt'} variant={stats.recording ? 'danger' : 'neutral'} onClick={onRecording} title="Şifreli kayıt başlat, aç veya indir" />
         <IconButton icon={<Trash2 size={15} />} label="Temizle" onClick={() => onControl('clear')} />
       </div>
       <label className="searchbox">

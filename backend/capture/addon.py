@@ -40,6 +40,19 @@ class InspectorAddon:
         self.on_session = on_session
         self.max_body_bytes = max_body_bytes
         self._pending: dict[str, Session] = {}
+        self.connections: set[str] = set()
+
+    def client_connected(self, client: Any) -> None:
+        self.connections.add(str(client.id))
+
+    def client_disconnected(self, client: Any) -> None:
+        self.connections.discard(str(client.id))
+
+    def discard(self, session_ids: list[str]) -> None:
+        evicted = set(session_ids)
+        for flow_id, session in list(self._pending.items()):
+            if session.id in evicted:
+                self._pending.pop(flow_id, None)
 
     def _identity(self, flow: Any) -> tuple[Any, Any]:
         client = flow.client_conn
@@ -204,9 +217,13 @@ class InspectorAddon:
             return
         message = flow.websocket.messages[-1]
         raw = bytes(message.content or b"")
+        del flow.websocket.messages[:-1]
         stream = session.stream or Stream(kind="websocket")
         captured = len(stream.reconstructed)
         remaining = max(0, self.max_body_bytes - captured)
+        if remaining == 0 or len(stream.frames) >= 10_000:
+            session.is_truncated = True
+            return
         frame_raw = raw[:remaining]
         message_type = str(getattr(message, "type", "message")).split(".")[-1].casefold()
         stream.frames.append(
@@ -239,6 +256,7 @@ class InspectorAddon:
         if session is None:
             return
         session.closed_at = datetime.now(UTC)
+        session.is_streaming = False
         session.duration_ms = (session.closed_at - session.opened_at).total_seconds() * 1000
         await self.on_session(session)
 
