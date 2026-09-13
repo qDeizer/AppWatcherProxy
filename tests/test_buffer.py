@@ -1,7 +1,17 @@
 import pytest
 
 from backend.store.buffer import SessionBuffer
-from backend.store.model import ApplicationInfo, Connection, Header, Payload, Request, Response, Session
+from backend.store.model import (
+    ApplicationInfo,
+    Connection,
+    Frame,
+    Header,
+    Payload,
+    Request,
+    Response,
+    Session,
+    Stream,
+)
 
 
 @pytest.mark.asyncio
@@ -45,6 +55,38 @@ async def test_binary_payload_is_preserved_and_json_serializable() -> None:
     serialized = session.model_dump_json()
     assert "AP8QdW5rbm93bg==" in serialized
     assert (await buffer.get(session.id)).request.body.raw == raw
+
+
+@pytest.mark.asyncio
+async def test_binary_websocket_stream_is_json_serializable() -> None:
+    raw = (b"1" * 19) + b"\xff"
+    session = Session(
+        connection_id="websocket-binary",
+        type="websocket",
+        connection=Connection(),
+        stream=Stream(
+            kind="websocket",
+            frames=[
+                Frame(
+                    seq=0,
+                    direction="down",
+                    size_bytes=len(raw),
+                    type="binary",
+                    raw=raw,
+                )
+            ],
+            reconstructed=raw,
+        ),
+        is_streaming=True,
+        is_binary=True,
+    )
+    buffer = SessionBuffer(max_sessions=10, max_bytes=1_000_000)
+
+    await buffer.upsert(session)
+
+    serialized = session.model_dump_json()
+    assert "MTExMTExMTExMTExMTExMTExMf8=" in serialized
+    assert (await buffer.get(session.id)).stream.reconstructed == raw
 
 
 @pytest.mark.asyncio

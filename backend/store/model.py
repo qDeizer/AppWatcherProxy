@@ -50,6 +50,8 @@ class Frame(BaseModel):
 
 
 class Stream(BaseModel):
+    model_config = ConfigDict(ser_json_bytes="base64")
+
     kind: Literal["sse", "chunked", "h2_data", "websocket", "grpc", "raw_tcp"]
     frames: list[Frame] = Field(default_factory=list)
     reconstructed: bytes = b""

@@ -10,7 +10,6 @@ import zstandard
 
 from backend.store.model import Payload
 
-
 TEXT_CONTENT_TYPES = (
     "application/json",
     "application/graphql",
