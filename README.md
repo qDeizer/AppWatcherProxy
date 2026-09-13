@@ -2,7 +2,7 @@
 
 Windows'ta çalışan, sistem genelindeki dış ağ bağlantılarını uygulama ve süreçlerle ilişkilendirerek yerel bir arayüzde incelemeyi hedefleyen network inspection aracı.
 
-> Durum: HTTP istek/yanıt inceleme, WebSocket kareleri, içerik araması, CA kurulumu, RAM ring buffer ve şifreli kayıt kullanılabilir. Bu sürüm nihai spesifikasyonun tamamı değildir: canlı SSE parçalama, genel TCP/UDP/DNS decoder'ları ve `.mitm` dışa aktarımı henüz yoktur. SSE içeriği yanıt tamamlanınca gösterilir.
+> Durum: HTTP istek/yanıt inceleme, WebSocket kareleri, canlı SSE olayları, içerik araması, CA kurulumu, RAM ring buffer, şifreli kayıt ve `.mitm` dışa aktarımı kullanılabilir. Genel TCP/UDP/DNS decoder'ları gibi diğer nihai spesifikasyon maddeleri henüz tamamlanmamıştır.
 
 ## İlk çalıştırma
 
@@ -69,6 +69,10 @@ npm run build
 **Filtrelenmiş RAM’i kaydet**, mevcut arama ve uygulama filtresine uyan geçmiş RAM oturumlarını ayrı bir şifreli dosyaya aktarır. Kayıt listesindeki **Aç**, capture ve kayıt durduktan sonra parolayla RAM listesini değiştirir. Yanlış parola veya bozuk dosyada mevcut RAM korunur. **Şifreli indir** dosyanın yedeğini indirir; başka bilgisayarda kullanmak için dosyayı `recordings/` içine yerleştirin.
 
 Dosyalar `recordings/<kimlik>.awp` biçimindedir: scrypt anahtar türetimi, AES-256-GCM doğrulamalı şifreleme ve sıralı parça doğrulaması kullanılır. Parola dosyada tutulmaz; kaybolursa kurtarılamaz. API anahtarları ve özel mesajlar içerebilir. Tamamlanmamış dosyalar sessizce yüklenmez. Dosya başına sınır 1 GB, yazma kuyruğu 96 MB'dır; disk dolması/yetişememesi görünür hata verir ve capture'dan bağımsız olarak kaydı durdurur.
+
+**Şifresini çöz · .mitm indir**, parolayı doğrular ve tamamlanmış HTTP/WebSocket oturumlarını mitmproxy FlowReader ile açılabilen bir dosyaya dönüştürür. Dosya düz metindir ve özel mesajları/API anahtarlarını içerebilir; indirmeden önce ekranda uyarı gösterilir. Eksik, kesilmiş veya desteklenmeyen oturumlar atlanır ve sayıları gösterilir. İçerikler kayıt anındaki yakalama sınırıyla sınırlıdır. Dosya yalnızca indirme akışında oluşturulur; uygulama diske şifresiz kopya yazmaz.
+
+SSE yanıtlarında `responseheaders` aşamasında passthrough akışı açılır; gelen baytlar ağa değiştirilmeden iletilirken `event`, `data`, `id`, `retry` alanları parça sınırlarından bağımsız çözümlenir ve olay tamamlanır tamamlanmaz Stream sekmesinde görünür. JSON `data` içeriği biçimlendirilir. Gzip/deflate SSE canlı çözülür; farklı içerik kodlamaları yanıt tamamlanınca çözümlenir, ham gövde her durumda korunur.
 
 ## Hata tanılama ve sınırlar
 

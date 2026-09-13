@@ -1,13 +1,22 @@
+from io import BytesIO
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from mitmproxy.io import FlowReader
 
 from backend.api.routes import router
 from backend.capture.engine import CaptureEngine, CaptureState
 from backend.events import EventBus
 from backend.store.buffer import SessionBuffer
-from backend.store.model import ApplicationInfo, Connection, Session
+from backend.store.model import (
+    ApplicationInfo,
+    Connection,
+    Payload,
+    Request,
+    Response,
+    Session,
+)
 from backend.store.recorder import Recorder
 
 
@@ -66,3 +75,32 @@ async def test_failed_capture_task_is_visible():
     capture._task = task
     await capture.stop()
     assert capture.state == CaptureState.STOPPED
+
+
+async def test_mitm_api_warns_about_skipped_sessions_and_rejects_wrong_password(tmp_path):
+    app = FastAPI()
+    app.include_router(router)
+    app.state.store = SessionBuffer(100, 1_000_000)
+    app.state.events = EventBus()
+    app.state.capture = CaptureEngine(None, 1024)
+    app.state.recorder = Recorder(tmp_path)
+    app.state.processing_error = None
+    await app.state.store.upsert(Session(
+        connection_id="http", type="http", connection=Connection(),
+        request=Request(method="GET", scheme="https", host="example.test", port=443, path="/events"),
+        response=Response(status_code=200, body=Payload(raw=b"data: hi\n\n", size_bytes=10)),
+    ))
+    await app.state.store.upsert(Session(connection_id="tcp", type="tcp", connection=Connection()))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        exported = await client.post("/api/recordings/export", json={"password": "api-password"})
+        recording_id = exported.json()["id"]
+        bad = await client.post(f"/api/recordings/{recording_id}/mitm", json={"password": "wrong-password"})
+        assert bad.status_code == 400
+        result = await client.post(f"/api/recordings/{recording_id}/mitm", json={"password": "api-password"})
+        assert result.status_code == 200
+        assert result.headers["x-exported-sessions"] == "1"
+        assert result.headers["x-skipped-sessions"] == "1"
+        assert result.headers["cache-control"] == "no-store"
+        flows = list(FlowReader(BytesIO(result.content)).stream())
+        assert len(flows) == 1
+        assert flows[0].response.raw_content == b"data: hi\n\n"

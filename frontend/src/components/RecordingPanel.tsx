@@ -28,6 +28,20 @@ export function RecordingPanel({ applications, query, onClose, onChanged }: {
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
     finally { setBusy(false) }
   }
+  async function downloadMitm(id: string) {
+    if (!window.confirm('Bu işlem şifresi çözülmüş .mitm dosyası indirir. API anahtarları ve özel mesajlar düz metin olabilir. Devam edilsin mi?')) return
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const result = await api.recordMitm(id, password)
+      const url = URL.createObjectURL(result.blob)
+      const link = document.createElement('a')
+      link.href = url; link.download = `${id}.mitm`; link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      setPassword('')
+      setNotice(`${result.exported} oturum .mitm dosyasına aktarıldı${result.skipped ? `; ${result.skipped} eksik veya desteklenmeyen oturum atlandı` : ''}. Dosya şifresizdir.`)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
   return <dialog ref={dialog} aria-labelledby="recording-heading" className="recording-dialog" onCancel={(event) => { if (busy) event.preventDefault(); else onClose() }}>
     <div className="panel-heading"><h2 id="recording-heading">Şifreli kayıtlar</h2><button className="button" disabled={busy} onClick={onClose}>Kapat</button></div>
     <div className="recording-content">
@@ -51,6 +65,7 @@ export function RecordingPanel({ applications, query, onClose, onChanged }: {
           if (window.confirm('RAM listesini bu kayıtla değiştirmek istiyor musunuz?')) void run(() => api.recordOpen(item.id, password), 'Kayıt RAM’e açıldı; ana tabloda inceleyebilirsiniz.')
         }}>Aç</button>
         {!active && <a className="button" href={`/api/recordings/${item.id}/download`} download>Şifreli indir</a>}
+        {!active && <button className="button" disabled={busy || password.length < 8} onClick={() => void downloadMitm(item.id)}>Şifresini çöz · .mitm indir</button>}
       </li>)}</ul>}
     </div>
   </dialog>

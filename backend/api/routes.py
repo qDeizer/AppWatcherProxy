@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.cert.manager import CertificateManager
 from backend.store.buffer import SessionBuffer
+from backend.store.mitm_export import inspect_recording, mitm_chunks
 from backend.store.recorder import read_recording
 
 router = APIRouter(prefix="/api")
@@ -134,6 +135,26 @@ async def recording_download(recording_id: str, request: Request):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return FileResponse(path, media_type="application/octet-stream", filename=path.name)
+
+
+@router.post("/recordings/{recording_id}/mitm")
+async def recording_mitm(recording_id: str, options: RecordingOptions, request: Request):
+    try:
+        path = request.app.state.recorder.path(recording_id)
+        plan = await asyncio.to_thread(inspect_recording, path, options.password)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, "Dışa aktarım açılamadı: parola yanlış, dosya eksik veya bozuk") from exc
+    if not plan.supported:
+        raise HTTPException(422, f"Replay için tam HTTP/WebSocket oturumu yok; {plan.skipped} oturum atlandı")
+    return StreamingResponse(
+        mitm_chunks(path, options.password, plan.positions), media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{recording_id}.mitm"',
+            "X-Exported-Sessions": str(plan.supported),
+            "X-Skipped-Sessions": str(plan.skipped),
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/recordings/{recording_id}/open")

@@ -35,8 +35,12 @@ try {
   await dialog.getByRole('link', { name: 'Şifreli indir' }).first().click()
   const download = await downloadEvent
   assert(download.suggestedFilename().endsWith('.awp'))
-  await dialog.getByLabel('Parola (en az 8 karakter)').fill('wrong-password')
   page.on('dialog', prompt => prompt.accept())
+  await dialog.getByLabel('Parola (en az 8 karakter)').fill('qa-only-test-password')
+  await dialog.getByRole('button', { name: 'Şifresini çöz · .mitm indir' }).first().click()
+  await dialog.getByRole('alert').filter({ hasText: 'Replay için tam HTTP/WebSocket oturumu yok' }).waitFor()
+  await page.screenshot({ path: resolve(output, 'mitm-empty-state.png') })
+  await dialog.getByLabel('Parola (en az 8 karakter)').fill('wrong-password')
   await dialog.getByRole('button', { name: 'Aç', exact: true }).first().click()
   await dialog.getByRole('alert').filter({ hasText: 'Kayıt açılamadı' }).waitFor()
   await dialog.getByLabel('Parola (en az 8 karakter)').fill('qa-only-test-password')
@@ -45,6 +49,16 @@ try {
   await page.screenshot({ path: resolve(output, 'recording-loaded.png') })
   await dialog.getByRole('button', { name: 'Kapat', exact: true }).click()
   assert.equal(await page.getByRole('dialog').count(), 0)
+  const now = new Date().toISOString()
+  const sse = Buffer.from('event: update\ndata: {"msg":"selam"}\nid: 42\n\n').toString('base64')
+  const summary = {id: 'qa-sse', time: now, application: 'qa-sse.exe', pid: 1, direction: 'up', protocol: 'HTTP', host: 'example.test', method_event: 'GET', path: '/events', status: 200, content_type: 'text/event-stream', sent: 0, received: 42, duration_ms: null, inspection: 'Full', inspection_reason: null, is_streaming: true, has_error: false, is_binary: false}
+  const detail = {id: 'qa-sse', connection_id: 'qa', type: 'http', opened_at: now, closed_at: null, duration_ms: null, http_version: 'HTTP/1.1', http2_stream_id: null, error: null, application: {name: 'qa-sse.exe', executable_path: null, icon: null}, process: {pid: 1, name: 'qa-sse.exe', executable_path: null, start_time: null}, connection: {id: 'qa', opened_at: now, closed_at: null, protocol: 'tcp', client_sockname: null, server_peername: null, server_hostname: 'example.test', dns_query: null, dns_answers: [], dns_duration_ms: null, inspection_status: 'Full', inspection_reason: null, tls: {version: null, cipher: null, alpn: null, sni: null, established: false, handshake_error: null}}, request: null, response: null, stream: {kind: 'sse', reconstructed: sse, frames: [{seq: 0, timestamp: now, direction: 'down', size_bytes: 42, type: 'sse', raw: sse, parsed: {event: 'update', data: {msg: 'selam'}, id: '42'}}]}, is_streaming: true, is_truncated: false, has_error: false, is_binary: false}
+  await page.route('**/api/sessions?*', route => route.fulfill({json: {items: [summary], total: 1}}))
+  await page.route('**/api/sessions/qa-sse', route => route.fulfill({json: detail}))
+  await page.getByRole('main').getByRole('button').filter({ hasText: 'qa-sse.exe' }).first().click()
+  await page.getByRole('tab', { name: 'Stream' }).click()
+  await page.getByText(/"msg": "selam"/).first().waitFor()
+  await page.screenshot({ path: resolve(output, 'sse-stream.png') })
   assert.deepEqual(failures, [])
   console.log(JSON.stringify({ passed: true, created, screenshots: output }))
 } finally {
