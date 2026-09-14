@@ -80,7 +80,7 @@ class ExportPlan:
     positions: frozenset[int]
 
 
-def inspect_recording(path: Path, password: str) -> ExportPlan:
+def inspect_recording(path: Path, password: str | None = None) -> ExportPlan:
     latest: dict[str, tuple[int, bool]] = {}
     for position, session in enumerate(read_recording(path, password)):
         eligible = can_export(session)
@@ -91,7 +91,7 @@ def inspect_recording(path: Path, password: str) -> ExportPlan:
     return ExportPlan(len(positions), len(latest) - len(positions), positions)
 
 
-def mitm_chunks(path: Path, password: str, positions: frozenset[int] | None = None) -> Iterator[bytes]:
+def mitm_chunks(path: Path, password: str | None = None, positions: frozenset[int] | None = None) -> Iterator[bytes]:
     selected = positions if positions is not None else inspect_recording(path, password).positions
     for position, session in enumerate(read_recording(path, password)):
         if position not in selected:

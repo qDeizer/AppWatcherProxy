@@ -101,7 +101,7 @@ async def clear_sessions(request: Request) -> dict:
 
 
 class RecordingOptions(BaseModel):
-    password: str = Field(min_length=8, max_length=1024)
+    password: str | None = Field(default=None, min_length=8, max_length=1024)
     applications: list[str] = Field(default_factory=list, max_length=1000)
     query: str = Field(default="", max_length=500)
 
@@ -116,7 +116,7 @@ async def recordings(request: Request) -> dict:
 @router.post("/recordings/start")
 async def recording_start(options: RecordingOptions, request: Request) -> dict:
     try:
-        recording_id = await request.app.state.recorder.start(options.password, options.applications)
+        recording_id = await request.app.state.recorder.start(None, options.applications)
     except (ValueError, OSError) as exc:
         raise HTTPException(400, "Kayıt başlatılamadı; mevcut kaydı durdurup disk izinlerini kontrol edin") from exc
     return {"id": recording_id}
@@ -187,7 +187,7 @@ async def recording_export(options: RecordingOptions, request: Request) -> dict:
     store = request.app.state.store
     sessions = await store.list(limit=store.max_sessions, query=options.query)
     recorder = Recorder(request.app.state.recorder.root)
-    recording_id = await recorder.start(options.password, options.applications)
+    recording_id = await recorder.start(None, options.applications)
     try:
         for session in reversed(sessions):
             if options.applications and session.application.name not in options.applications:

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -32,16 +33,20 @@ async def test_recording_api_roundtrip_and_safe_failed_import(tmp_path):
                       application=ApplicationInfo(name="qa.exe"), error="selam")
     await app.state.store.upsert(session)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        options = {"password": "qa-password", "applications": ["qa.exe"], "query": "selam"}
+        options = {"applications": ["qa.exe"], "query": "selam"}
         exported = await client.post("/api/recordings/export", json=options)
         assert exported.status_code == 200
         recording_id = exported.json()["id"]
         download = await client.get(f"/api/recordings/{recording_id}/download")
-        assert download.content.startswith(b"AWP1")
+        assert download.content.startswith(b"AWP2")
         assert b"selam" not in download.content
-        wrong = await client.post(f"/api/recordings/{recording_id}/open", json={"password": "wrong-password"})
-        assert wrong.status_code == 400
+        assert (await client.get("/api/recordings")).json()["items"][0]["password_required"] is False
+        path = tmp_path / f"{recording_id}.awp"
+        path.write_bytes(download.content[:-1])
+        damaged = await client.post(f"/api/recordings/{recording_id}/open", json={})
+        assert damaged.status_code == 400
         assert len(app.state.store) == 1
+        path.write_bytes(download.content)
         app.state.capture.state = CaptureState.RUNNING
         blocked = await client.post(f"/api/recordings/{recording_id}/open", json=options)
         assert blocked.status_code == 409
@@ -92,11 +97,9 @@ async def test_mitm_api_warns_about_skipped_sessions_and_rejects_wrong_password(
     ))
     await app.state.store.upsert(Session(connection_id="tcp", type="tcp", connection=Connection()))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        exported = await client.post("/api/recordings/export", json={"password": "api-password"})
+        exported = await client.post("/api/recordings/export", json={})
         recording_id = exported.json()["id"]
-        bad = await client.post(f"/api/recordings/{recording_id}/mitm", json={"password": "wrong-password"})
-        assert bad.status_code == 400
-        result = await client.post(f"/api/recordings/{recording_id}/mitm", json={"password": "api-password"})
+        result = await client.post(f"/api/recordings/{recording_id}/mitm", json={})
         assert result.status_code == 200
         assert result.headers["x-exported-sessions"] == "1"
         assert result.headers["x-skipped-sessions"] == "1"
@@ -104,3 +107,15 @@ async def test_mitm_api_warns_about_skipped_sessions_and_rejects_wrong_password(
         flows = list(FlowReader(BytesIO(result.content)).stream())
         assert len(flows) == 1
         assert flows[0].response.raw_content == b"data: hi\n\n"
+
+        old_id = await app.state.recorder.start("old-password", [])
+        old_session = (await app.state.store.list())[-1]
+        old_session.opened_at = datetime.now(UTC)
+        app.state.recorder.enqueue(old_session)
+        await app.state.recorder.stop()
+        legacy = (await client.get("/api/recordings")).json()["items"]
+        assert next(item for item in legacy if item["id"] == old_id)["password_required"] is True
+        wrong = await client.post(f"/api/recordings/{old_id}/mitm", json={"password": "wrong-password"})
+        assert wrong.status_code == 400
+        unlocked = await client.post(f"/api/recordings/{old_id}/mitm", json={"password": "old-password"})
+        assert unlocked.status_code == 200

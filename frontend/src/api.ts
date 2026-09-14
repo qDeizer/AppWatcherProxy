@@ -10,11 +10,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  recordings: () => request<{items: {id: string; size: number; modified: string}[]; active: boolean; id: string | null; error: string | null}>('/api/recordings'),
-  recordStart: (password: string, applications: string[]) => request('/api/recordings/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password, applications})}),
+  recordings: () => request<{items: {id: string; size: number; modified: string; password_required: boolean}[]; active: boolean; id: string | null; error: string | null}>('/api/recordings'),
+  recordStart: (applications: string[]) => request('/api/recordings/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({applications})}),
   recordStop: () => request('/api/recordings/stop', {method: 'POST'}),
-  recordOpen: (id: string, password: string) => request(`/api/recordings/${id}/open`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password})}),
-  recordMitm: async (id: string, password: string) => {
+  recordOpen: (id: string, password: string | null = null) => request(`/api/recordings/${id}/open`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password})}),
+  recordMitm: async (id: string, password: string | null = null) => {
     const response = await fetch(`/api/recordings/${id}/mitm`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password})})
     if (!response.ok) {
       const body = await response.json().catch(() => null)
@@ -22,7 +22,7 @@ export const api = {
     }
     return {blob: await response.blob(), exported: Number(response.headers.get('X-Exported-Sessions') ?? 0), skipped: Number(response.headers.get('X-Skipped-Sessions') ?? 0)}
   },
-  recordExport: (password: string, applications: string[], query: string) => request('/api/recordings/export', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password, applications, query})}),
+  recordExport: (applications: string[], query: string) => request('/api/recordings/export', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({applications, query})}),
   stats: () => request<Stats>('/api/stats'),
   certificateStatus: () => request<CertificateStatus>('/api/certificate/status'),
   applications: () => request<ApplicationSummary[]>('/api/applications'),

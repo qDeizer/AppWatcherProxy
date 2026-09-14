@@ -12,6 +12,8 @@ import type { SessionSummary } from './types'
 export default function App() {
   const { stats, applications, sessions, certificate, error, loading, runControl, refresh } = useInspector()
   const [recordingOpen, setRecordingOpen] = useState(false)
+  const [recordBusy, setRecordBusy] = useState(false)
+  const [recordActionError, setRecordActionError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query.trim().toLowerCase())
   const [searchResults, setSearchResults] = useState<SessionSummary[] | null>(null)
@@ -76,12 +78,27 @@ export default function App() {
     return next
   })
 
+  const toggleRecording = async () => {
+    if (recordBusy) return
+    setRecordBusy(true)
+    setRecordActionError(null)
+    try {
+      if (stats.recording) await api.recordStop()
+      else await api.recordStart([...selectedApps])
+    } catch (reason) {
+      setRecordActionError(reason instanceof Error ? reason.message : 'Kayıt işlemi başarısız')
+    } finally {
+      await refresh(true)
+      setRecordBusy(false)
+    }
+  }
+
   return <div className="app-shell">
-    <TopBar stats={stats} query={query} onQueryChange={setQuery} onControl={(action) => void runControl(action)} onRecording={() => setRecordingOpen(true)} />
-    {recordingOpen && <RecordingPanel applications={[...selectedApps]} query={query} onClose={() => setRecordingOpen(false)} onChanged={refresh} />}
-    {stats.recording && <div className="system-banner error-banner" role="status">● Kayıt açık · ⚠ Sensitive Data · Trafik şifreli olarak diske yazılıyor.</div>}
+    <TopBar stats={stats} query={query} onQueryChange={setQuery} onControl={(action) => void runControl(action)} onRecordToggle={() => void toggleRecording()} onRecordings={() => setRecordingOpen(true)} recordBusy={recordBusy} />
+    {recordingOpen && <RecordingPanel applications={[...selectedApps]} query={query} onClose={() => setRecordingOpen(false)} onChanged={() => refresh(true)} />}
+    {stats.recording && <div className="system-banner error-banner" role="status">● Kayıt açık · ⚠ Sensitive Data · {stats.capture_state === 'running' ? 'Trafik şifreli olarak diske yazılıyor.' : 'Capture duruyor; trafik için Başlat’a bas.'}</div>}
     {(stats.capture_error || stats.recording_error || stats.processing_error) && <div className="system-banner error-banner" role="alert">{stats.capture_error || stats.recording_error || stats.processing_error}</div>}
-    {error ? <div className="system-banner error-banner" role="alert"><AlertTriangle size={16} /><strong>İşlem tamamlanamadı</strong><span>{error}</span></div> : null}
+    {error || recordActionError ? <div className="system-banner error-banner" role="alert"><AlertTriangle size={16} /><strong>İşlem tamamlanamadı</strong><span>{recordActionError || error}</span></div> : null}
     {bannerVisible && certificate && !certificate.trusted ? <div className="system-banner"><AlertTriangle size={16} /><strong>CA sertifikası kurulmamış</strong><span>start.bat dosyasını yeniden çalıştırıp sertifika kurulumunu onaylayın.</span><button title="Bildirimi kapat" onClick={() => setBannerVisible(false)}><X size={15} /></button></div> : null}
     <div className="workspace-grid">
       <ApplicationPanel applications={applications} selected={selectedApps} onToggle={toggleApp} totalSessions={sessions.length} />

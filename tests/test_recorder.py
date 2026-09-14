@@ -84,3 +84,19 @@ async def test_path_and_double_start_are_rejected(tmp_path):
     with pytest.raises(ValueError):
         recorder.path("../passwords")
     await recorder.stop()
+
+
+async def test_passwordless_recording_uses_windows_account_and_rejects_tampering(tmp_path):
+    recorder = Recorder(tmp_path)
+    recording_id = await recorder.start(None, [])
+    recorder.enqueue(sample())
+    await recorder.stop()
+    path = recorder.path(recording_id)
+    assert path.read_bytes().startswith(b"AWP2")
+    assert recorder.list()[0]["password_required"] is False
+    assert next(read_recording(path)).stream.reconstructed == b"selam\xff\x00"
+    changed = bytearray(path.read_bytes())
+    changed[-20] ^= 1
+    path.write_bytes(changed)
+    with pytest.raises(ValueError):
+        list(read_recording(path))

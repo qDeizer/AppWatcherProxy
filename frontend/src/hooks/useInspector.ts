@@ -19,11 +19,14 @@ export function useInspector() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [controlError, setControlError] = useState<string | null>(null)
-  const refreshing = useRef(false)
+  const refreshing = useRef<Promise<void> | null>(null)
 
-  const refresh = useCallback(async () => {
-    if (refreshing.current) return
-    refreshing.current = true
+  const refresh = useCallback(async (force = false) => {
+    if (refreshing.current) {
+      await refreshing.current
+      if (!force) return
+    }
+    const pending = (async () => {
     try {
       const [nextStats, nextApplications, nextSessions, nextCertificate] = await Promise.all([
         api.stats(),
@@ -31,8 +34,8 @@ export function useInspector() {
         api.sessions(),
         api.certificateStatus(),
       ])
+      setStats(nextStats)
       startTransition(() => {
-        setStats(nextStats)
         setApplications(nextApplications)
         setSessions(nextSessions.items)
         setCertificate(nextCertificate)
@@ -41,9 +44,11 @@ export function useInspector() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Backend bağlantısı kurulamadı')
     } finally {
-      refreshing.current = false
       setLoading(false)
     }
+    })()
+    refreshing.current = pending
+    try { await pending } finally { if (refreshing.current === pending) refreshing.current = null }
   }, [])
 
   useEffect(() => {
@@ -60,7 +65,7 @@ export function useInspector() {
       } catch (reason) {
         setControlError(reason instanceof Error ? reason.message : 'İşlem başarısız')
       } finally {
-        await refresh()
+        await refresh(true)
       }
     },
     [refresh],

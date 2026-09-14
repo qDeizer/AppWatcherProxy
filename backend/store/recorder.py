@@ -13,8 +13,10 @@ from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 from backend.diagnostics import report_exception
 from backend.store.model import Session
+from backend.store.windows_protection import protect_key, unprotect_key
 
 MAGIC = b"AWP1"
+LOCAL_MAGIC = b"AWP2"
 MAX_CHUNK = 96 * 1024 * 1024
 MAX_FILE = 1024 * 1024 * 1024
 
@@ -24,9 +26,19 @@ def derive_key(password: str, salt: bytes) -> bytes:
 
 
 class RecordingWriter:
-    def __init__(self, path: Path, password: str) -> None:
-        self.header = MAGIC + os.urandom(16)
-        self.cipher = AESGCM(derive_key(password, self.header[4:]))
+    def __init__(self, path: Path, password: str | None) -> None:
+        salt = os.urandom(16)
+        if password is None:
+            secret = os.urandom(32)
+            wrapped = protect_key(secret)
+            if len(wrapped) > 4096:
+                raise ValueError("Windows anahtar boyutu geçersiz")
+            self.header = LOCAL_MAGIC + salt + struct.pack(">H", len(wrapped)) + wrapped
+            key = secret
+        else:
+            self.header = MAGIC + salt
+            key = derive_key(password, salt)
+        self.cipher = AESGCM(key)
         self.sequence = 0
         self.file = path.open("xb")
         self.file.write(self.header)
@@ -48,14 +60,35 @@ class RecordingWriter:
         self.file.close()
 
 
-def read_recording(path: Path, password: str):
+def read_recording(path: Path, password: str | None = None):
     with path.open("rb") as source:
         if path.stat().st_size > MAX_FILE:
             raise ValueError("Kayıt boyut sınırını aşıyor")
-        header = source.read(20)
-        if len(header) != 20 or header[:4] != MAGIC:
+        prefix = source.read(20)
+        if len(prefix) != 20:
             raise ValueError("Geçersiz kayıt biçimi")
-        cipher = AESGCM(derive_key(password, header[4:]))
+        if prefix[:4] == LOCAL_MAGIC:
+            size_data = source.read(2)
+            if len(size_data) != 2:
+                raise ValueError("Kayıt anahtarı kesilmiş")
+            wrapped_size = struct.unpack(">H", size_data)[0]
+            if not 1 <= wrapped_size <= 4096:
+                raise ValueError("Geçersiz kayıt anahtarı")
+            wrapped = source.read(wrapped_size)
+            if len(wrapped) != wrapped_size:
+                raise ValueError("Kayıt anahtarı kesilmiş")
+            header = prefix + size_data + wrapped
+            key = unprotect_key(wrapped)
+            if len(key) != 32:
+                raise ValueError("Geçersiz Windows kayıt anahtarı")
+        elif prefix[:4] == MAGIC:
+            if not password:
+                raise ValueError("Eski kayıt için parola gerekli")
+            header = prefix
+            key = derive_key(password, prefix[4:])
+        else:
+            raise ValueError("Geçersiz kayıt biçimi")
+        cipher = AESGCM(key)
         sequence = 0
         while True:
             length = source.read(4)
@@ -95,11 +128,11 @@ class Recorder:
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
-    async def start(self, password: str, applications: list[str]) -> str:
+    async def start(self, password: str | None, applications: list[str]) -> str:
         async with self._lock:
             if self.active or self._task is not None:
                 raise ValueError("Önce mevcut kaydı durdurun")
-            if len(password) < 8:
+            if password is not None and len(password) < 8:
                 raise ValueError("Parola en az 8 karakter olmalı")
             self.root.mkdir(parents=True, exist_ok=True)
             recording_id = uuid4().hex
@@ -177,8 +210,12 @@ class Recorder:
     def list(self) -> list[dict]:
         if not self.root.exists():
             return []
+        def requires_password(path: Path) -> bool:
+            with path.open("rb") as source:
+                return source.read(4) == MAGIC
         return [
             {"id": path.stem, "size": path.stat().st_size,
+             "password_required": requires_password(path),
              "modified": datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()}
             for path in sorted(self.root.glob("*.awp"), key=lambda item: item.stat().st_mtime, reverse=True)
             if not path.is_symlink()

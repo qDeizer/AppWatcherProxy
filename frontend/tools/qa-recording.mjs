@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { chromium } from 'playwright-core'
 
 const output = resolve(import.meta.dirname, '../../.runtime/qa')
+const baseUrl = process.env.QA_BASE_URL ?? 'http://127.0.0.1:43110'
 await mkdir(output, { recursive: true })
 const browser = await chromium.launch({ headless: true, channel: 'chrome' })
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
@@ -16,17 +17,16 @@ page.on('response', async response => {
   }
 })
 try {
-  const stats = await (await page.request.get('http://127.0.0.1:43110/api/stats')).json()
+  const stats = await (await page.request.get(`${baseUrl}/api/stats`)).json()
   assert.equal(stats.session_count, 0, 'Run only on an empty QA instance: import replaces RAM')
   assert.equal(stats.capture_state, 'stopped')
   assert.equal(stats.recording, false)
-  await page.goto('http://127.0.0.1:43110')
+  await page.goto(baseUrl)
   await page.getByRole('button', { name: 'Kayıt', exact: true }).click()
+  await page.getByRole('button', { name: 'Kaydı durdur', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Kayıtlar', exact: true }).click()
   const dialog = page.getByRole('dialog')
   await dialog.waitFor()
-  assert(await dialog.getByRole('button', { name: 'Kaydı başlat', exact: true }).isDisabled())
-  await dialog.getByLabel('Parola (en az 8 karakter)').fill('qa-only-test-password')
-  await dialog.getByRole('button', { name: 'Kaydı başlat', exact: true }).click()
   await dialog.getByRole('button', { name: '● Kaydı durdur', exact: true }).waitFor()
   await page.screenshot({ path: resolve(output, 'recording-active.png') })
   await dialog.getByRole('button', { name: '● Kaydı durdur', exact: true }).click()
@@ -36,14 +36,9 @@ try {
   const download = await downloadEvent
   assert(download.suggestedFilename().endsWith('.awp'))
   page.on('dialog', prompt => prompt.accept())
-  await dialog.getByLabel('Parola (en az 8 karakter)').fill('qa-only-test-password')
   await dialog.getByRole('button', { name: 'Şifresini çöz · .mitm indir' }).first().click()
   await dialog.getByRole('alert').filter({ hasText: 'Replay için tam HTTP/WebSocket oturumu yok' }).waitFor()
   await page.screenshot({ path: resolve(output, 'mitm-empty-state.png') })
-  await dialog.getByLabel('Parola (en az 8 karakter)').fill('wrong-password')
-  await dialog.getByRole('button', { name: 'Aç', exact: true }).first().click()
-  await dialog.getByRole('alert').filter({ hasText: 'Kayıt açılamadı' }).waitFor()
-  await dialog.getByLabel('Parola (en az 8 karakter)').fill('qa-only-test-password')
   await dialog.getByRole('button', { name: 'Aç', exact: true }).first().click()
   await dialog.getByText('Kayıt RAM’e açıldı; ana tabloda inceleyebilirsiniz.', { exact: true }).waitFor()
   await page.screenshot({ path: resolve(output, 'recording-loaded.png') })
