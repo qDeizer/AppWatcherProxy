@@ -7,6 +7,7 @@ export interface Stats {
   capture_state: CaptureState
   capture_error: string | null
   recording: boolean
+  recording_format?: 'jsonl'
   recording_error?: string | null
   processing_error?: string | null
 }

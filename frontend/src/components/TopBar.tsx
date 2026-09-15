@@ -34,7 +34,7 @@ export function TopBar({ stats, query, onQueryChange, onControl, onRecordToggle,
           disabled={busy}
           onClick={() => onControl(running ? 'stop' : 'start')}
         />
-        <IconButton icon={stats.recording ? <Square size={15} /> : <Circle size={15} />} label={recordBusy ? 'İşleniyor…' : stats.recording ? 'Kaydı durdur' : 'Kayıt'} variant={stats.recording ? 'danger' : 'neutral'} disabled={recordBusy} onClick={onRecordToggle} title={stats.recording ? 'Disk kaydını durdur' : 'Tek tıkla disk kaydını başlat'} />
+        <IconButton icon={stats.recording ? <Square size={15} /> : <Circle size={15} />} label={recordBusy ? 'İşleniyor…' : stats.recording ? 'Kaydı durdur' : 'Kayıt'} variant={stats.recording ? 'danger' : 'neutral'} disabled={recordBusy || (!stats.recording && stats.recording_format !== 'jsonl')} onClick={onRecordToggle} title={stats.recording ? 'Disk kaydını durdur' : stats.recording_format === 'jsonl' ? 'Tek tıkla şifresiz disk kaydını başlat' : 'Şifresiz kayıt için uygulamayı yeniden başlatın'} />
         <IconButton icon={<FolderOpen size={15} />} label="Kayıtlar" onClick={onRecordings} title="Kayıtları aç veya dışa aktar" />
         <IconButton icon={<Trash2 size={15} />} label="Temizle" onClick={() => onControl('clear')} />
       </div>

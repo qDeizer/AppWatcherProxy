@@ -1,7 +1,10 @@
 import type { ApplicationSummary, CertificateStatus, SessionDetail, SessionPage, Stats } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init)
+  const response = await fetch(path, {
+    ...init,
+    signal: init?.signal ?? AbortSignal.timeout(init?.method === 'POST' ? 300_000 : 15_000),
+  })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(typeof body?.detail === 'string' ? body.detail : `İstek başarısız (${response.status})`)
@@ -10,10 +13,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  recordings: () => request<{items: {id: string; size: number; modified: string; password_required: boolean}[]; active: boolean; id: string | null; error: string | null}>('/api/recordings'),
+  recordings: () => request<{items: {id: string; size: number; modified: string; format?: 'jsonl' | 'awp'; encrypted?: boolean; password_required: boolean}[]; active: boolean; default_format?: 'jsonl'; id: string | null; error: string | null}>('/api/recordings'),
   recordStart: (applications: string[]) => request('/api/recordings/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({applications})}),
   recordStop: () => request('/api/recordings/stop', {method: 'POST'}),
   recordOpen: (id: string, password: string | null = null) => request(`/api/recordings/${id}/open`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password})}),
+  recordPlain: (id: string, password: string | null = null) => request<{ids: string[]; recovered_incomplete: boolean}>(`/api/recordings/${id}/plain`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password})}),
   recordMitm: async (id: string, password: string | null = null) => {
     const response = await fetch(`/api/recordings/${id}/mitm`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password})})
     if (!response.ok) {

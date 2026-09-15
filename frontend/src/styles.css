@@ -35,7 +35,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid #4cb9f2; outline-
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .mono, code { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; }
 
-.app-shell { height: 100%; display: grid; grid-template-rows: 58px auto minmax(0, 1fr) 25px; background: var(--bg); }
+.app-shell { height: 100%; display: flex; flex-direction: column; background: var(--bg); }
+.app-shell > .topbar { flex: 0 0 58px; }
+.app-shell > .system-banner { flex: 0 0 auto; }
+.app-shell > .workspace-grid { flex: 1 1 0; }
+.app-shell > .statusbar { flex: 0 0 25px; }
 .topbar { display: grid; grid-template-columns: 205px auto minmax(220px, 1fr) auto; align-items: center; gap: 12px; padding: 0 12px; background: #09131a; border-bottom: 1px solid var(--line); box-shadow: 0 3px 12px rgb(0 0 0 / 18%); z-index: 3; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; }
 .brand-mark { width: 26px; height: 26px; position: relative; display: inline-grid; place-items: center; border: 1px solid #315469; border-radius: 50%; }
@@ -219,7 +223,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #4cb9f2; outline-
   .brand { grid-column: 1; }
   .toolbar-actions { grid-column: 2; border: 0; padding: 0; }
   .searchbox { grid-column: 1 / -1; grid-row: 2; max-width: none; }
-  .app-shell { grid-template-rows: 96px auto minmax(0, 1fr) 25px; }
+  .app-shell > .topbar { flex-basis: 96px; }
   .workspace-grid { grid-template-columns: 170px minmax(480px, 1fr); }
   .detail-panel { position: fixed; z-index: 10; inset: 110px 0 25px auto; width: min(380px, 88vw); border-left: 1px solid var(--line); box-shadow: -12px 0 30px rgb(0 0 0 / 35%); }
   .detail-panel.detail-empty { display: none; }

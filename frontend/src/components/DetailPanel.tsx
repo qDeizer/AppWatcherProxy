@@ -27,6 +27,11 @@ export function DetailPanel({ session, certificate, query, onClose }: DetailPane
   const sessionStreaming = session?.is_streaming ?? false
 
   useEffect(() => {
+    setDetail(null)
+    setError(null)
+  }, [sessionId])
+
+  useEffect(() => {
     if (!sessionId) {
       setDetail(null)
       setError(null)

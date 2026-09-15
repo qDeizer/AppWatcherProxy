@@ -53,19 +53,42 @@ class CaptureEngine:
             self.error = None
             try:
                 from mitmproxy import options
-                from mitmproxy.tools.dump import DumpMaster
+                from backend.capture.master import EmbeddedMaster
 
                 opts = options.Options(mode=["local"])
-                self._master = DumpMaster(opts, with_termlog=False, with_dumper=False)
+                self._master = EmbeddedMaster(opts, with_termlog=False, with_dumper=False)
                 self._addon = InspectorAddon(self._on_session, self._max_body_bytes)
                 self._master.addons.add(self._addon)
                 self._task = asyncio.create_task(self._master.run())
                 self._task.add_done_callback(self._finished)
-                await asyncio.sleep(0)
+                ready = asyncio.create_task(self._master.ready.wait())
+                try:
+                    completed, _ = await asyncio.wait(
+                        {ready, self._task}, timeout=30, return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if not completed:
+                        self._master.shutdown()
+                        self._task.cancel()
+                        await asyncio.gather(self._task, return_exceptions=True)
+                        raise RuntimeError("Capture başlangıcı zaman aşımına uğradı")
+                finally:
+                    ready.cancel()
+                    await asyncio.gather(ready, return_exceptions=True)
                 if self._task.done():
                     await self._task
                     raise RuntimeError("Capture görevi başlangıçta sonlandı")
                 self.state = CaptureState.RUNNING
+            except asyncio.CancelledError:
+                if self._master is not None:
+                    self._master.shutdown()
+                if self._task is not None:
+                    self._task.cancel()
+                    await asyncio.gather(self._task, return_exceptions=True)
+                self._master = None
+                self._task = None
+                self._addon = None
+                self.state = CaptureState.STOPPED
+                raise
             except Exception as exc:
                 self.error = str(exc)
                 self.state = CaptureState.ERROR

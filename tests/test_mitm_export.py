@@ -18,9 +18,9 @@ from backend.store.model import (
 from backend.store.recorder import Recorder
 
 
-async def test_decrypted_mitm_is_readable_and_preserves_captured_body(tmp_path):
+async def test_plain_recording_mitm_is_readable_and_preserves_captured_body(tmp_path):
     recorder = Recorder(tmp_path)
-    recording_id = await recorder.start("secure-password", [])
+    recording_id = await recorder.start(None, [])
     body = b"\x00selam\xff"
     session = Session(
         connection_id="test", type="http", application=ApplicationInfo(name="test.exe"),
@@ -36,9 +36,9 @@ async def test_decrypted_mitm_is_readable_and_preserves_captured_body(tmp_path):
     recorder.enqueue(session)
     await recorder.stop()
     path = recorder.path(recording_id)
-    plan = inspect_recording(path, "secure-password")
+    plan = inspect_recording(path)
     assert (plan.supported, plan.skipped) == (1, 0)
-    flows = list(FlowReader(BytesIO(b"".join(mitm_chunks(path, "secure-password")))).stream())
+    flows = list(FlowReader(BytesIO(b"".join(mitm_chunks(path)))).stream())
     assert len(flows) == 1
     assert flows[0].request.url == "https://example.test/api?q=1"
     assert flows[0].request.raw_content == body
@@ -48,7 +48,7 @@ async def test_decrypted_mitm_is_readable_and_preserves_captured_body(tmp_path):
 
 async def test_websocket_frames_roundtrip_through_mitm(tmp_path):
     recorder = Recorder(tmp_path)
-    recording_id = await recorder.start("secure-password", [])
+    recording_id = await recorder.start(None, [])
     session = Session(
         connection_id="ws", type="websocket", connection=Connection(),
         request=Request(method="GET", scheme="https", host="example.test", port=443, path="/ws"),
@@ -61,6 +61,6 @@ async def test_websocket_frames_roundtrip_through_mitm(tmp_path):
     )
     recorder.enqueue(session)
     await recorder.stop()
-    flow = next(FlowReader(BytesIO(b"".join(mitm_chunks(recorder.path(recording_id), "secure-password")))).stream())
+    flow = next(FlowReader(BytesIO(b"".join(mitm_chunks(recorder.path(recording_id))))).stream())
     assert [message.type for message in flow.websocket.messages] == [Opcode.TEXT, Opcode.BINARY, Opcode.PING]
     assert [message.content for message in flow.websocket.messages] == [b"hello", b"\x00\xff", b""]

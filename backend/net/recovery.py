@@ -92,6 +92,8 @@ def write_runtime_state(runtime_dir: Path, state: dict[str, Any]) -> None:
 
 def cleanup_stale_state(runtime_dir: Path) -> dict[str, Any]:
     previous = read_runtime_state(runtime_dir)
+    if process_is_alive(previous.get("main_pid"), previous.get("main_started_at")):
+        return {"previous_state": previous, "quic_rule_removed": False, "skipped_live": True}
     rule_removed = remove_quic_rule()
     state_file = runtime_dir / "state.json"
     try:

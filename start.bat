@@ -46,6 +46,10 @@ call npm ci || goto :error_popd
 call npm run build || goto :error_popd
 popd
 
+echo Calisan Network Inspector ornegi kontrol ediliyor...
+".venv\Scripts\python.exe" -m backend.net.restart_existing --runtime-dir "%CD%\.runtime"
+if not "%errorlevel%"=="0" goto :restart_error
+
 echo Stale ag durumu temizleniyor...
 ".venv\Scripts\python.exe" -m backend.net.cleanup --runtime-dir "%CD%\.runtime"
 
@@ -58,6 +62,11 @@ goto :cleanup
 popd
 :error
 echo Kurulum basarisiz oldu. Yukaridaki hatayi inceleyin.
+pause
+exit /b 1
+
+:restart_error
+echo Eski ornek guvenli durdurulamadi. Ag durumuna dokunulmadi; yeni ornek baslatilmadi.
 pause
 exit /b 1
 

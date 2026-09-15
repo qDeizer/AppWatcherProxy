@@ -4,8 +4,10 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
+from backend.capture.chunks import ChunkCapture
 from backend.capture.processes import find_connection_pid, resolve_process
 from backend.capture.sse import SSECapture
+from backend.diagnostics import report_exception
 from backend.inspect.content import decoded_payload_bytes, inspect_payload
 from backend.store.model import (
     Connection,
@@ -43,9 +45,25 @@ class InspectorAddon:
         self.max_body_bytes = max_body_bytes
         self._pending: dict[str, Session] = {}
         self._sse: dict[str, SSECapture] = {}
+        self._chunks: dict[str, ChunkCapture] = {}
         self._sse_tasks: dict[str, asyncio.Task] = {}
         self._sse_dirty: set[str] = set()
         self.connections: set[str] = set()
+
+    async def done(self) -> None:
+        # Finish queued snapshots before the recording writer is stopped.
+        tasks = list(self._sse_tasks.values())
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    report_exception("capture_publish_failed", result)
+        self._sse_tasks.clear()
+        self._sse_dirty.clear()
+        self._sse.clear()
+        self._chunks.clear()
+        self._pending.clear()
+        self.connections.clear()
 
     def client_connected(self, client: Any) -> None:
         self.connections.add(str(client.id))
@@ -56,9 +74,12 @@ class InspectorAddon:
     def discard(self, session_ids: list[str]) -> None:
         evicted = set(session_ids)
         for flow_id, session in list(self._pending.items()):
-            if session.id in evicted:
+            # The RAM ring may evict a long-lived stream. Keep its capture
+            # state until it ends so disk recording does not lose later bytes.
+            if session.id in evicted and session.closed_at is not None:
                 self._pending.pop(flow_id, None)
                 self._sse.pop(flow_id, None)
+                self._chunks.pop(flow_id, None)
                 self._sse_tasks.pop(flow_id, None)
                 self._sse_dirty.discard(flow_id)
 
@@ -82,10 +103,21 @@ class InspectorAddon:
         session = self._pending.get(flow_id)
         if tracker is None or session is None or not chunk:
             return chunk
+        raw_before = len(tracker.raw)
         events = tracker.feed(chunk)
         if session.response is not None:
             session.response.body.size_bytes = tracker.total_bytes
+            session.response.body.raw = bytes(tracker.raw)
+            session.response.body.is_truncated = tracker.truncated
         if session.stream is not None:
+            captured = bytes(tracker.raw[raw_before:])
+            if captured and len(session.stream.frames) < 10_000:
+                session.stream.frames.append(Frame(
+                    seq=len(session.stream.frames), direction="down",
+                    size_bytes=len(chunk), type="chunk", raw=captured,
+                ))
+            elif captured:
+                tracker.truncated = True
             session.stream.reconstructed = bytes(tracker.reconstructed)
             for raw, parsed in events:
                 if len(session.stream.frames) >= 10_000:
@@ -95,12 +127,48 @@ class InspectorAddon:
                     seq=len(session.stream.frames), direction="down", size_bytes=len(raw),
                     type="sse", raw=raw, parsed=parsed,
                 ))
-            if events:
-                session.response.body.raw = bytes(tracker.raw)
-                session.response.body.is_truncated = tracker.truncated
-                session.is_truncated |= tracker.truncated
-                self._publish_sse(flow_id, session)
+            session.is_truncated |= tracker.truncated
+            self._publish_sse(flow_id, session)
         return chunk
+
+    def _response_chunk(self, flow_id: str, chunk: bytes) -> bytes:
+        tracker = self._chunks.get(flow_id)
+        session = self._pending.get(flow_id)
+        if tracker is None or session is None or not chunk:
+            return chunk
+        captured = tracker.feed(chunk)
+        if session.response is not None:
+            session.response.body.size_bytes = tracker.total_bytes
+            session.response.body.raw = bytes(tracker.raw)
+            session.response.body.is_truncated = tracker.truncated
+        if session.stream is not None:
+            if captured and len(session.stream.frames) < 10_000:
+                session.stream.frames.append(Frame(
+                    seq=len(session.stream.frames), direction="down",
+                    size_bytes=len(chunk), type="chunk", raw=captured,
+                ))
+            elif captured:
+                tracker.truncated = True
+            session.stream.reconstructed = bytes(tracker.raw)
+        session.is_truncated |= tracker.truncated
+        self._publish_sse(flow_id, session)
+        return chunk
+
+    @staticmethod
+    def _stream_kind(flow: Any) -> str | None:
+        headers = flow.response.headers
+        content_type = headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+        if content_type == "text/event-stream":
+            return "sse"
+        if content_type.startswith("application/grpc"):
+            return "grpc"
+        if content_type in {"application/x-ndjson", "application/ndjson"}:
+            return "chunked"
+        if "chunked" in headers.get("transfer-encoding", "").casefold():
+            return "chunked"
+        if "content-length" not in headers and flow.response.status_code not in {204, 304}:
+            return "h2_data"
+        return None
 
     def _identity(self, flow: Any) -> tuple[Any, Any]:
         client = flow.client_conn
@@ -206,18 +274,25 @@ class InspectorAddon:
         await self.on_session(session)
 
     async def responseheaders(self, flow: Any) -> None:
-        if not flow.response or not flow.response.headers.get("content-type", "").casefold().startswith("text/event-stream"):
+        if not flow.response:
+            return
+        kind = self._stream_kind(flow)
+        if kind is None:
             return
         session = self._pending.get(flow.id) or self._new_http_session(flow)
         session.response = self._response(flow)
         session.response.total_ms = None
-        session.stream = Stream(kind="sse")
+        session.stream = Stream(kind=kind)
         session.is_streaming = True
         self._pending[flow.id] = session
-        self._sse[flow.id] = SSECapture(
-            self.max_body_bytes, flow.response.headers.get("content-encoding")
-        )
-        flow.response.stream = lambda chunk: self._sse_chunk(flow.id, chunk)
+        if kind == "sse":
+            self._sse[flow.id] = SSECapture(
+                self.max_body_bytes, flow.response.headers.get("content-encoding")
+            )
+            flow.response.stream = lambda chunk: self._sse_chunk(flow.id, chunk)
+        else:
+            self._chunks[flow.id] = ChunkCapture(self.max_body_bytes)
+            flow.response.stream = lambda chunk: self._response_chunk(flow.id, chunk)
         await self.on_session(session)
 
     async def response(self, flow: Any) -> None:
@@ -227,7 +302,12 @@ class InspectorAddon:
             await task
         self._sse_dirty.discard(flow.id)
         tracker = self._sse.pop(flow.id, None)
-        response = self._response(flow, bytes(tracker.raw), tracker.total_bytes) if tracker else self._response(flow)
+        chunk_tracker = self._chunks.pop(flow.id, None)
+        active_tracker = tracker or chunk_tracker
+        response = (
+            self._response(flow, bytes(active_tracker.raw), active_tracker.total_bytes)
+            if active_tracker else self._response(flow)
+        )
         completed = _timestamp(flow.response.timestamp_end, session.opened_at)
         session.response = response
         session.closed_at = completed
@@ -246,11 +326,24 @@ class InspectorAddon:
                 fallback = SSECapture(self.max_body_bytes)
                 events = fallback.feed(decoded)
                 session.stream.reconstructed = bytes(fallback.reconstructed)
-                session.stream.frames = [
+                chunk_frames = [frame for frame in session.stream.frames if frame.type == "chunk"]
+                event_frames = [
                     Frame(seq=index, timestamp=completed, direction="down",
                           size_bytes=len(raw), type="sse", raw=raw, parsed=parsed)
                     for index, (raw, parsed) in enumerate(events[:10_000])
                 ]
+                session.stream.frames = (chunk_frames + event_frames)[:10_000]
+                for index, frame in enumerate(session.stream.frames):
+                    frame.seq = index
+        elif chunk_tracker:
+            session.is_streaming = False
+            session.is_truncated |= chunk_tracker.truncated
+            if session.stream is not None:
+                reconstructed = decoded_payload_bytes(
+                    bytes(chunk_tracker.raw), flow.response.headers.get("content-encoding")
+                )
+                session.stream.reconstructed = reconstructed[:self.max_body_bytes]
+                session.is_truncated |= len(reconstructed) > self.max_body_bytes
         elif content_type == "text/event-stream":
             reconstructed = decoded_payload_bytes(
                 response.body.raw, response.body.content_encoding
@@ -349,6 +442,7 @@ class InspectorAddon:
         if not getattr(flow, "error", None):
             return
         self._sse.pop(flow.id, None)
+        self._chunks.pop(flow.id, None)
         task = self._sse_tasks.pop(flow.id, None)
         if task is not None:
             await task

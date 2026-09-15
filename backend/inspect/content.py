@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import zlib
+from io import BytesIO
 from urllib.parse import parse_qsl
 
 import brotli
@@ -21,6 +22,49 @@ TEXT_CONTENT_TYPES = (
     "text/",
 )
 
+MAX_DECODED_BYTES = 64 * 1024 * 1024
+
+
+def _decompress_gzip(value: bytes) -> bytes:
+    with gzip.GzipFile(fileobj=BytesIO(value)) as source:
+        decoded = source.read(MAX_DECODED_BYTES + 1)
+        if len(decoded) <= MAX_DECODED_BYTES and source.read(1):
+            raise ValueError("Decoded payload exceeds inspection limit")
+    if len(decoded) > MAX_DECODED_BYTES:
+        raise ValueError("Decoded payload exceeds inspection limit")
+    return decoded
+
+
+def _decompress_deflate(value: bytes) -> bytes:
+    for wbits in (zlib.MAX_WBITS, -zlib.MAX_WBITS):
+        try:
+            decoder = zlib.decompressobj(wbits)
+            decoded = decoder.decompress(value, MAX_DECODED_BYTES + 1)
+            if len(decoded) > MAX_DECODED_BYTES or decoder.unconsumed_tail or not decoder.eof:
+                raise ValueError("Decoded payload exceeds inspection limit or is incomplete")
+            decoded += decoder.flush(MAX_DECODED_BYTES + 1 - len(decoded))
+            if len(decoded) > MAX_DECODED_BYTES:
+                raise ValueError("Decoded payload exceeds inspection limit")
+            return decoded
+        except zlib.error:
+            continue
+    raise zlib.error("Invalid deflate payload")
+
+
+def _decompress_brotli(value: bytes) -> bytes:
+    decoder = brotli.Decompressor()
+    parts: list[bytes] = []
+    total = 0
+    for offset in range(0, len(value), 4096):
+        part = decoder.process(value[offset:offset + 4096])
+        total += len(part)
+        if total > MAX_DECODED_BYTES:
+            raise ValueError("Decoded payload exceeds inspection limit")
+        parts.append(part)
+    if not decoder.is_finished():
+        raise ValueError("Incomplete brotli payload")
+    return b"".join(parts)
+
 
 def decoded_payload_bytes(raw: bytes, content_encoding: str | None) -> bytes:
     """Return a best-effort decoded copy while preserving the original bytes elsewhere."""
@@ -31,18 +75,25 @@ def decoded_payload_bytes(raw: bytes, content_encoding: str | None) -> bytes:
     try:
         for encoding in reversed(encodings):
             if encoding == "gzip":
-                value = gzip.decompress(value)
+                value = _decompress_gzip(value)
             elif encoding == "deflate":
-                try:
-                    value = zlib.decompress(value)
-                except zlib.error:
-                    value = zlib.decompress(value, -zlib.MAX_WBITS)
+                value = _decompress_deflate(value)
             elif encoding == "br":
-                value = brotli.decompress(value)
+                value = _decompress_brotli(value)
             elif encoding in {"zstd", "zstandard"}:
-                value = zstandard.ZstdDecompressor().decompress(value)
+                # Streaming zstd frames commonly omit the decompressed size.
+                # Without an explicit bound, python-zstandard refuses those
+                # frames even though the captured bytes are complete.
+                declared_size = zstandard.frame_content_size(value)
+                if declared_size >= 0 and declared_size > MAX_DECODED_BYTES:
+                    raise ValueError("Decoded payload exceeds inspection limit")
+                value = zstandard.ZstdDecompressor().decompress(
+                    value, max_output_size=MAX_DECODED_BYTES
+                )
+                if len(value) > MAX_DECODED_BYTES:
+                    raise ValueError("Decoded payload exceeds inspection limit")
         return value
-    except (OSError, ValueError, zlib.error, brotli.error, zstandard.ZstdError):
+    except (EOFError, OSError, ValueError, zlib.error, brotli.error, zstandard.ZstdError):
         return raw
 
 
@@ -90,7 +141,7 @@ def inspect_payload(
         try:
             parsed = json.loads(text)
             detected = "application/json"
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             pass
     elif declared == "application/x-www-form-urlencoded":
         parsed = dict(parse_qsl(text, keep_blank_values=True))

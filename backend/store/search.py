@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re
+import regex as re
 from collections.abc import Iterable
 from typing import Any
 
@@ -100,12 +100,14 @@ def build_search_document(session: Session) -> str:
 
 
 def matches_search(document: str, query: str) -> bool:
-    normalized = query.strip().casefold()
+    normalized = query.strip()
     if not normalized:
         return True
     if len(normalized) > 2 and normalized.startswith("/") and normalized.endswith("/"):
         try:
-            return re.search(normalized[1:-1], document, re.IGNORECASE) is not None
+            return re.search(normalized[1:-1], document, re.IGNORECASE, timeout=0.05) is not None
+        except TimeoutError as exc:
+            raise ValueError("Arama deseni çok uzun sürüyor; daha basit bir desen kullanın") from exc
         except re.error:
             return False
-    return normalized in document
+    return normalized.casefold() in document

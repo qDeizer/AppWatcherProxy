@@ -26,7 +26,7 @@ def parse_event(lines: list[bytes]) -> dict | None:
     payload = "\n".join(data)
     try:
         fields["data"] = json.loads(payload)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         fields["data"] = payload
     return fields
 

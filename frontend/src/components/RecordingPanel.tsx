@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 
-type RecordingItem = { id: string; size: number; modified: string; password_required: boolean }
+type RecordingItem = { id: string; size: number; modified: string; format: 'jsonl' | 'awp'; encrypted: boolean; password_required: boolean }
 
 export function RecordingPanel({ applications, query, onClose, onChanged }: {
   applications: string[]; query: string; onClose: () => void; onChanged: () => Promise<void>
@@ -9,14 +9,18 @@ export function RecordingPanel({ applications, query, onClose, onChanged }: {
   const dialog = useRef<HTMLDialogElement>(null)
   const [items, setItems] = useState<RecordingItem[]>([])
   const [active, setActive] = useState(false)
+  const [plainReady, setPlainReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
   async function refresh() {
     const data = await api.recordings()
-    setItems(data.items)
+    setItems(data.items.map((item) => ({...item,
+      format: item.format ?? 'awp', encrypted: item.encrypted ?? true,
+    })))
     setActive(data.active)
+    setPlainReady(data.default_format === 'jsonl')
     if (data.error) setError(data.error)
   }
 
@@ -50,8 +54,21 @@ export function RecordingPanel({ applications, query, onClose, onChanged }: {
     void run(() => api.recordOpen(item.id, password), 'Kayıt RAM’e açıldı; ana tabloda inceleyebilirsiniz.')
   }
 
+  function copyPlain(item: RecordingItem) {
+    const password = passwordFor(item)
+    if (password === undefined) return
+    setBusy(true); setError(''); setNotice('')
+    void api.recordPlain(item.id, password).then(async (result) => {
+      await refresh(); await onChanged()
+      setNotice(result.recovered_incomplete
+        ? 'Eksik eski kaydın doğrulanmış oturumları şifresiz JSONL olarak kurtarıldı; orijinal korundu. Son oturumlar eksik olabilir.'
+        : 'Eski kayıt şifresiz JSONL olarak kopyalandı; orijinal korundu.')
+    }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+      .finally(() => setBusy(false))
+  }
+
   async function downloadMitm(item: RecordingItem) {
-    if (!window.confirm('Bu işlem şifresi çözülmüş .mitm dosyası indirir. API anahtarları ve özel mesajlar düz metin olabilir. Devam edilsin mi?')) return
+    if (!window.confirm('Bu işlem .mitm dosyası indirir. API anahtarları ve özel mesajlar düz metin olacaktır. Devam edilsin mi?')) return
     const password = passwordFor(item)
     if (password === undefined) return
     setBusy(true); setError(''); setNotice('')
@@ -69,24 +86,26 @@ export function RecordingPanel({ applications, query, onClose, onChanged }: {
   return <dialog ref={dialog} aria-labelledby="recording-heading" className="recording-dialog" onCancel={(event) => { if (busy) event.preventDefault(); else onClose() }}>
     <div className="panel-heading"><h2 id="recording-heading">Kayıtlar</h2><button className="button" disabled={busy} onClick={onClose}>Kapat</button></div>
     <div className="recording-content">
-      <p>⚠ Sensitive Data — Trafik API anahtarı ve özel mesaj içerebilir. Yeni kayıtlar Windows hesabınızla şifrelenir; parola sormadan açılır.</p>
+      <p>⚠ Sensitive Data — Yeni .jsonl kayıtları şifresizdir. Trafik, API anahtarları, çerezler ve özel mesajlar dosyada düz metin bulunabilir.</p>
+      {!plainReady && <p role="alert" className="recording-error">Çalışan backend henüz eski sürüm. Şifresiz kayıt için uygulamayı yeniden başlatın.</p>}
       <p>Kapsam: {applications.length ? applications.join(', ') : 'Tüm uygulamalar'}. Canlı kayıt yalnızca başlatıldıktan sonra açılan oturumları içerir; kapsam kayıt boyunca sabittir.</p>
       {error && <p role="alert" className="recording-error">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       <div className="recording-actions">
-        <button className={`button ${active ? 'button-danger' : 'button-primary'}`} disabled={busy} onClick={() => void run(() => active ? api.recordStop() : api.recordStart(applications), active ? 'Kayıt durduruldu.' : 'Kayıt açık. Capture başlatıldığında yeni trafik kaydedilir.')}>
+        <button className={`button ${active ? 'button-danger' : 'button-primary'}`} disabled={busy || (!active && !plainReady)} onClick={() => void run(() => active ? api.recordStop() : api.recordStart(applications), active ? 'Kayıt durduruldu.' : 'Kayıt açık. Capture başlatıldığında yeni trafik kaydedilir.')}>
           {busy ? 'İşleniyor…' : active ? '● Kaydı durdur' : 'Kaydı başlat'}
         </button>
-        <button className="button" disabled={busy} onClick={() => void run(() => api.recordExport(applications, query), 'Filtreye uyan RAM oturumları şifreli kaydedildi.')}>Filtrelenmiş RAM’i kaydet</button>
+        <button className="button" disabled={busy || !plainReady} onClick={() => void run(() => api.recordExport(applications, query), 'Filtreye uyan RAM oturumları düz metin kaydedildi.')}>Filtrelenmiş RAM’i kaydet</button>
         {!active && <button className="button" disabled={busy} onClick={() => void run(api.recordStop, 'Kayıt dosyası kapatıldı.')}>Açık dosyayı kapat</button>}
       </div>
       <h3>Bilgisayardaki kayıtlar</h3>
       <p>Açma işlemi RAM listesini değiştirir. Önce capture ve kaydı durdurun. Dosyalar recordings klasöründedir.</p>
       {!items.length ? <p>Henüz kayıt yok.</p> : <ul className="recording-list">{items.map((item) => <li key={item.id}>
-        <span>{new Date(item.modified).toLocaleString('tr-TR')} · {(item.size / 1024).toFixed(1)} KB <small>{item.id}{item.password_required ? ' · Eski parolalı kayıt' : ' · Bu Windows hesabıyla açılır'}</small></span>
+        <span>{new Date(item.modified).toLocaleString('tr-TR')} · {(item.size / 1024).toFixed(1)} KB <small>{item.id}.{item.format}{item.password_required ? ' · Eski parolalı kayıt' : item.encrypted ? ' · Eski Windows-şifreli kayıt' : ' · Şifresiz JSONL'}</small></span>
         <button className="button" disabled={busy || active} onClick={() => open(item)}>Aç</button>
-        {!active && <a className="button" href={`/api/recordings/${item.id}/download`} download>Şifreli indir</a>}
-        {!active && <button className="button" disabled={busy} onClick={() => void downloadMitm(item)}>Şifresini çöz · .mitm indir</button>}
+        {!active && <a className="button" href={`/api/recordings/${item.id}/download`} download>{item.encrypted ? 'Eski kaydı indir' : 'JSONL indir'}</a>}
+        {!active && item.encrypted && <button className="button" disabled={busy || !plainReady} onClick={() => copyPlain(item)}>Şifresiz kopya oluştur</button>}
+        {!active && <button className="button" disabled={busy} onClick={() => void downloadMitm(item)}>.mitm indir</button>}
       </li>)}</ul>}
     </div>
   </dialog>

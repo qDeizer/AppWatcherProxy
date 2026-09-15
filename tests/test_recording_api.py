@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -18,7 +19,26 @@ from backend.store.model import (
     Response,
     Session,
 )
-from backend.store.recorder import Recorder
+from backend.store.recorder import END_MARKER, Recorder, RecordingWriter
+
+
+async def test_export_rotates_segments_and_all_are_readable(tmp_path, monkeypatch):
+    from backend.store import recorder as module
+    monkeypatch.setattr(module, "MAX_FILE", 1600)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.store = SessionBuffer(100, 1_000_000)
+    app.state.recorder = Recorder(tmp_path)
+    sessions = [Session(connection_id="test", type="tcp", connection=Connection()) for _ in range(5)]
+    for session in sessions:
+        await app.state.store.upsert(session)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        result = await client.post("/api/recordings/export", json={})
+    assert result.status_code == 200
+    ids = result.json()["ids"]
+    assert len(ids) > 1
+    restored = [s for rid in ids for s in module.read_recording(tmp_path / f"{rid}.jsonl")]
+    assert {s.id for s in restored} == {s.id for s in sessions}
 
 
 async def test_recording_api_roundtrip_and_safe_failed_import(tmp_path):
@@ -38,10 +58,13 @@ async def test_recording_api_roundtrip_and_safe_failed_import(tmp_path):
         assert exported.status_code == 200
         recording_id = exported.json()["id"]
         download = await client.get(f"/api/recordings/{recording_id}/download")
-        assert download.content.startswith(b"AWP2")
-        assert b"selam" not in download.content
-        assert (await client.get("/api/recordings")).json()["items"][0]["password_required"] is False
-        path = tmp_path / f"{recording_id}.awp"
+        assert download.content.startswith(b"{")
+        assert b"selam" in download.content
+        listed = (await client.get("/api/recordings")).json()
+        assert listed["default_format"] == "jsonl"
+        assert listed["items"][0]["password_required"] is False
+        assert (await client.get("/api/stats")).json()["recording_format"] == "jsonl"
+        path = tmp_path / f"{recording_id}.jsonl"
         path.write_bytes(download.content[:-1])
         damaged = await client.post(f"/api/recordings/{recording_id}/open", json={})
         assert damaged.status_code == 400
@@ -108,13 +131,19 @@ async def test_mitm_api_warns_about_skipped_sessions_and_rejects_wrong_password(
         assert len(flows) == 1
         assert flows[0].response.raw_content == b"data: hi\n\n"
 
-        old_id = await app.state.recorder.start("old-password", [])
+        old_id = uuid4().hex
+        writer = RecordingWriter(tmp_path / f"{old_id}.awp", "old-password")
         old_session = (await app.state.store.list())[-1]
         old_session.opened_at = datetime.now(UTC)
-        app.state.recorder.enqueue(old_session)
-        await app.state.recorder.stop()
+        writer.append(old_session.model_dump_json().encode())
+        writer.append(END_MARKER)
+        writer.close()
         legacy = (await client.get("/api/recordings")).json()["items"]
         assert next(item for item in legacy if item["id"] == old_id)["password_required"] is True
+        converted = await client.post(f"/api/recordings/{old_id}/plain", json={"password": "old-password"})
+        assert converted.status_code == 200
+        assert converted.json()["recovered_incomplete"] is False
+        assert (tmp_path / f"{converted.json()['ids'][0]}.jsonl").is_file()
         wrong = await client.post(f"/api/recordings/{old_id}/mitm", json={"password": "wrong-password"})
         assert wrong.status_code == 400
         unlocked = await client.post(f"/api/recordings/{old_id}/mitm", json={"password": "old-password"})

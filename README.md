@@ -2,7 +2,7 @@
 
 Windows'ta çalışan, sistem genelindeki dış ağ bağlantılarını uygulama ve süreçlerle ilişkilendirerek yerel bir arayüzde incelemeyi hedefleyen network inspection aracı.
 
-> Durum: HTTP istek/yanıt inceleme, WebSocket kareleri, canlı SSE olayları, içerik araması, CA kurulumu, RAM ring buffer, şifreli kayıt ve `.mitm` dışa aktarımı kullanılabilir. Genel TCP/UDP/DNS decoder'ları gibi diğer nihai spesifikasyon maddeleri henüz tamamlanmamıştır.
+> Durum: HTTP istek/yanıt inceleme, WebSocket kareleri, canlı SSE olayları, içerik araması, CA kurulumu, RAM ring buffer, şifresiz JSONL kayıt ve `.mitm` dışa aktarımı kullanılabilir. Genel TCP/UDP/DNS decoder'ları gibi diğer nihai spesifikasyon maddeleri henüz tamamlanmamıştır.
 
 ## İlk çalıştırma
 
@@ -12,6 +12,8 @@ Windows'ta çalışan, sistem genelindeki dış ağ bağlantılarını uygulama 
 4. `start.bat`, mitmproxy CA dosyasını yoksa üretir ve parmak izini Windows güven deposuyla karşılaştırır.
 5. CA henüz güvenilir değilse, Yerel Makine `Trusted Root` deposuna kurmadan önce konsolda açıkça onay ister. Onay verilmezse capture başlatılmaz.
 6. Backend hazır olduğunda `http://127.0.0.1:43110` varsayılan tarayıcıda açılır.
+
+Uygulama zaten açıksa `start.bat` tekrar çalıştırıldığında önce mevcut kaydı ve capture'ı API üzerinden durdurur; yalnız PID, başlama zamanı, çalışma dizini ve dinleme portu bu projeyle eşleşirse eski süreci kapatıp yeni sürümü başlatır. Doğrulama veya güvenli durdurma başarısızsa çalışan örneğe dokunmadan hata gösterir.
 
 Python 3.12+ ve Node.js 20+ gerekir. Uygulama internet erişimi için sistem proxy ayarlarını değiştirmez.
 
@@ -64,18 +66,20 @@ npm run build
 
 ## Kayıt ve yeniden açma
 
-Üst çubuktaki **Kayıt** düğmesi kaydı tek tıkla başlatır; **Kaydı durdur** dosyayı tamamlar. Parola sorulmaz. Uygulama seçimi yoksa tüm uygulamalar, seçim varsa yalnızca seçilen uygulamalar kaydedilir. Kapsam başlangıçta sabitlenir; önceden açılmış oturumlar canlı kayda alınmaz. Trafiği yakalamak için **Başlat** ile capture da çalışıyor olmalıdır. **Kayıtlar** düğmesi dosya listesini açar.
+Üst çubuktaki **Kayıt** düğmesi kaydı tek tıkla başlatır; **Kaydı durdur** dosyayı tamamlar. Parola sorulmaz ve yeni dosyalar **şifrelenmez**. Uygulama seçimi yoksa tüm uygulamalar, seçim varsa yalnızca seçilen uygulamalar kaydedilir. Kapsam başlangıçta sabitlenir; önceden açılmış oturumlar canlı kayda alınmaz. Trafiği yakalamak için **Başlat** ile capture da çalışıyor olmalıdır. **Kayıtlar** düğmesi dosya listesini açar.
 
-**Filtrelenmiş RAM’i kaydet**, mevcut arama ve uygulama filtresine uyan geçmiş RAM oturumlarını ayrı bir şifreli dosyaya aktarır. Kayıt listesindeki **Aç**, capture ve kayıt durduktan sonra RAM listesini değiştirir. Bozuk dosyada mevcut RAM korunur. **Şifreli indir** dosyanın yedeğini indirir. Yeni kayıtlar aynı Windows hesabında parola olmadan açılır; başka hesapta veya bilgisayarda açmak için orijinal hesapta `.mitm` dışa aktarımı yapın.
+**Filtrelenmiş RAM’i kaydet**, mevcut arama ve uygulama filtresine uyan geçmiş RAM oturumlarını ayrı bir JSONL dosyasına aktarır. Kayıt listesindeki **Aç**, capture ve kayıt durduktan sonra RAM listesini değiştirir. Bozuk dosyada mevcut RAM korunur. **JSONL indir** dosyanın yedeğini indirir. Yeni kayıtlar herhangi bir metin editöründe veya JSONL okuyucusunda incelenebilir.
 
-Dosyalar `recordings/<kimlik>.awp` biçimindedir. Yeni `AWP2` kayıtlarında rastgele AES-256-GCM anahtarı Windows DPAPI ile mevcut kullanıcı hesabına bağlanır; parola oluşturulmaz veya istenmez. Eski `AWP1` kayıtları değişmeden kalır ve yalnızca onlar açılırken eski parolaları sorulur. Kayıtlar API anahtarları ve özel mesajlar içerebilir. Tamamlanmamış dosyalar sessizce yüklenmez. Dosya başına sınır 1 GB, yazma kuyruğu 96 MB'dır; disk dolması/yetişememesi görünür hata verir ve capture'dan bağımsız olarak kaydı durdurur.
+Yeni dosyalar `recordings/<kimlik>.jsonl` biçimindedir. Her satır bir tam oturum anlık görüntüsüdür; aynı oturumun akış boyunca birden fazla görüntüsü olabilir. Son satır `{"end":true}` tamamlanma işaretidir. Kayıt 1 GB sınırına yaklaşınca otomatik olarak yeni JSONL parçasına geçer. Eski `AWP1`/`AWP2` şifreli kayıtları uyumluluk için açılabilir; yeni şifreli kayıt üretilmez. **JSONL dosyaları API anahtarları, çerezler, özel mesajlar ve yüklenen içerikleri düz metin barındırabilir.** Tamamlanmamış dosyalar sessizce yüklenmez. Yazma kuyruğu 96 MB'dır; yetişemediğinde önceden yazılan bölüm tamamlanır ve hata görünür; disk yazma hatasında dosya eksik kalabilir.
 
-**Şifresini çöz · .mitm indir**, tamamlanmış HTTP/WebSocket oturumlarını mitmproxy FlowReader ile açılabilen bir dosyaya dönüştürür. Yeni kayıtlarda parola sorulmaz. Dosya düz metindir ve özel mesajları/API anahtarlarını içerebilir; indirmeden önce ekranda uyarı gösterilir. Eksik, kesilmiş veya desteklenmeyen oturumlar atlanır ve sayıları gösterilir. İçerikler kayıt anındaki yakalama sınırıyla sınırlıdır. Dosya yalnızca indirme akışında oluşturulur; uygulama diske şifresiz kopya yazmaz.
+Eski `.awp` dosyaları kayıt listesinden **Şifresiz kopya oluştur** ile JSONL'ye dönüştürülebilir. Eski kayıt eksik kapandıysa yalnız şifreleme doğrulamasından geçen oturumlar kurtarılır ve arayüz bu durumu belirtir. Orijinal dosya otomatik silinmez.
 
-SSE yanıtlarında `responseheaders` aşamasında passthrough akışı açılır; gelen baytlar ağa değiştirilmeden iletilirken `event`, `data`, `id`, `retry` alanları parça sınırlarından bağımsız çözümlenir ve olay tamamlanır tamamlanmaz Stream sekmesinde görünür. JSON `data` içeriği biçimlendirilir. Gzip/deflate SSE canlı çözülür; farklı içerik kodlamaları yanıt tamamlanınca çözümlenir, ham gövde her durumda korunur.
+**.mitm indir**, tamamlanmış HTTP/WebSocket oturumlarını mitmproxy FlowReader ile açılabilen bir dosyaya dönüştürür. Yeni kayıtlarda parola sorulmaz. JSONL ve `.mitm` dosyaları düz metindir; özel mesajları/API anahtarlarını içerebilir. Eksik, kesilmiş veya desteklenmeyen oturumlar atlanır ve sayıları gösterilir. İçerikler kayıt anındaki gövde yakalama sınırıyla sınırlıdır.
+
+SSE, chunked, NDJSON, gRPC ve uzunluk başlığı olmayan yanıtlar `responseheaders` aşamasından itibaren parça parça kaydedilir; gelen baytlar ağa değiştirilmeden iletilir. SSE için `event`, `data`, `id`, `retry` alanları parça sınırlarından bağımsız çözümlenir; her ham parça da ayrıca saklanır. Gzip/deflate SSE canlı çözülür; diğer sıkıştırmalar yanıt tamamlanınca çözülür. Uzunluğu başlıkta olmayan zstd çerçeveleri de arama ve ayrıştırma için açılır; ham gövde korunur.
 
 ## Hata tanılama ve sınırlar
 
 `.runtime/diagnostics.log` ve dönen üç yedek, uygulama yaşam döngüsünü ve yakalanan hataların tür/kod konumlarını saklar; trafik gövdeleri, parolalar ve hata mesajlarındaki olası sırlar bu dosyaya yazılmaz. İşletim sisteminin süreci zorla sonlandırması uygulama traceback'i bırakmayabilir. Eski log yoksa kapanış nedeni kesin olarak belirlenemez.
 
-RAM ring buffer tahmini bütçesi 512 MB, oturum sayısı 100.000, gövde yakalama sınırı 10 MB'dır. Bunlar toplam süreç RAM'i için sert bir işletim sistemi limiti değildir. WebSocket geçmişi ayrıca 10.000 kareyle sınırlıdır. Arayüz 1,5 saniyede bir yenilenir; tablo en son 1.000 sonucu gösterir, içerik araması backend'deki RAM verisini tarar. `start.bat` frontend'i her çalıştırmada yeniden derler; güncel kaynaklar eski bir build nedeniyle gizlenmez.
+RAM ring buffer tahmini bütçesi 512 MB, oturum sayısı 100.000, gövde yakalama sınırı 10 MB'dır. Bunlar toplam süreç RAM'i için sert bir işletim sistemi limiti değildir. Sıkıştırılmış içeriğin ayrıştırma sınırı 64 MB'dır; aşılırsa sıkıştırılmış ham baytlar korunur, ayrıştırma yapılmaz. WebSocket geçmişi ayrıca 10.000 kareyle sınırlıdır. Arayüz 1,5 saniyede bir yenilenir; tablo en son 1.000 sonucu gösterir, içerik araması backend'deki RAM verisini tarar. `start.bat` frontend'i her çalıştırmada yeniden derler; güncel kaynaklar eski bir build nedeniyle gizlenmez.
